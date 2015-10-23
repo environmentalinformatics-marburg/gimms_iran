@@ -9,6 +9,10 @@ library(doParallel)
 library(remote)
 library(Kendall)
 
+# library(devtools)
+# install_github('dutri001/bfastSpatial')
+library(bfastSpatial)
+
 ## initialize parallel backend
 cores <- detectCores() - 1
 cl <- makeCluster(cores)
@@ -58,7 +62,11 @@ gimms_list_deseason <- foreach(i = 1:nlayers(gimms_rasters_deseason),
               overwrite = TRUE, format = "GTiff")
 gimms_rasters_deseason <- stack(gimms_list_deseason)
 
-## apply mann-kendall trend test
+
+################################################################################
+### apply mann-kendall trend test (Mann, 1945) on a pixel basis
+################################################################################
+
 kendallsTau <- function(x, p = 0.001) {
   
   # if not specified, set p to 1
@@ -81,6 +89,15 @@ gimms_raster_trend <- overlay(gimms_rasters_deseason, fun = function(x) {
 format = "GTiff", overwrite = TRUE)
 
 
+################################################################################
+### breakpoint detection (see http://www.loicdutrieux.com/bfastSpatial/)
+################################################################################
+
+gimms_dates <- monthlyIndices(gimms_files, to_date = TRUE, 
+                              format = "%Y-%m-%d")
+gimms_dates <- as.Date(gimms_dates)
+gimms_rasters_bfm <- bfmSpatial(gimms_rasters_crop, dates = gimms_dates, 
+                                mc.cores = cores)
 
 ## deregister parallel backend
 stopCluster(cl)
