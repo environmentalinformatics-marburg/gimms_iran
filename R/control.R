@@ -2,32 +2,29 @@
 ### global settings
 ################################################################################
 
+## working directory
+setwd("/media/fdetsch/modis_data/gimms_iran/")
+
 ## required packages
-library(gimms)
-library(rworldmap)
-library(doParallel)
-library(remote)
-library(Kendall)
-library(RColorBrewer)
+lib <- c("Rsenal", "gimms", "doParallel", "remote", "Kendall", "RColorBrewer")
+jnk <- sapply(lib, function(x) library(x, character.only = TRUE))
 
 # library(devtools)
 # install_github('dutri001/bfastSpatial')
-library(bfastSpatial)
+# library(bfastSpatial)
 
 ## initialize parallel backend
-cores <- detectCores() - 1
-cl <- makeCluster(cores)
-registerDoParallel(cl)
+cores <- detectCores()
+supcl <- makeCluster(cores)
+registerDoParallel(supcl)
 
 
 ################################################################################
 ### data processing
 ################################################################################
 
-## location of gimms raw data (jan 1982 to dec 2013)
-ch_dir_extdata <- "/media/fdetsch/XChange/gimms_iran/data/"
-
-gimms_files <- rearrangeFiles(dsn = ch_dir_extdata, full.names = TRUE)
+## gimms raw data
+gimms_files <- rearrangeFiles(dsn = "data", full.names = TRUE)
 gimms_rasters <- stack(gimms_files)
 
 ## crop global gimms images
@@ -54,6 +51,10 @@ gimms_list_crop <- foreach(i = 1:nlayers(gimms_rasters),
 
 gimms_rasters_crop <- stack(gimms_list_crop)
 
+# reimport
+fls_gimms_crop <- rearrangeFiles(dsn = "data/crp", full.names = TRUE, 
+                                 pattern = "CRP_.*.tif$", pos = c(4, 6, 8) + 4)
+gimms_rasters_crop <- stack(fls_gimms_crop)
 
 ################################################################################
 ## remove seasonal signal
@@ -70,11 +71,17 @@ lst_gimms_means <-
     
     # calculate long-term mean of current period (e.g. for 1981-2013 'jul15a')
     calc(rst_gimms_tmp, fun = mean, na.rm = TRUE,
-         filename = paste0(ch_dir_extdata, "longterm_means/mean_", j, k),
+         filename = paste0("data/longterm_means/mean_", j, k),
          format = "GTiff", overwrite = TRUE)
   }
 
 rst_gimms_means <- stack(lst_gimms_means)
+
+# reimport
+fls_gimms_means <- list.files("data/longterm_means", full.names = TRUE)
+int_id <- do.call("c", lapply(month.abb[c(7:12, 1:6)], function(i) grep(i, fls_gimms_means)))
+fls_gimms_means <- fls_gimms_means[int_id]
+rst_gimms_means <- stack(fls_gimms_means)
 
 ## replicate bi-monthly 'gimms_raster_means' to match up with number of layers of
 ## initial 'gimms_raster_agg' (as `foreach` does not support recycling!)
@@ -90,7 +97,7 @@ lst_gimms_dsn <-
             
             overlay(gimms_rasters_crop[[i]], rst_gimms_means[[i]],
                     fun = function(x, y) {x - y},
-                    filename = paste0(ch_dir_extdata, "dsn/DSN_",
+                    filename = paste0("data/dsn/DSN_",
                                       names(gimms_rasters_crop[[i]]), ".tif"),
                     format = "GTiff", overwrite = TRUE)
             
@@ -98,13 +105,14 @@ lst_gimms_dsn <-
 
 rst_gimms_dsn <- stack(lst_gimms_dsn)
 
+# reimport()
 
 ################################################################################
 ### apply mann-kendall trend test (Mann, 1945) on a pixel basis
 ################################################################################
 
 ## 1982-2013
-fls_gimms_dsn <- rearrangeFiles(dsn = paste0(ch_dir_extdata, "/dsn"), 
+fls_gimms_dsn <- rearrangeFiles(dsn = "data/dsn", 
                                 pattern = "^DSN_.*VI3g.tif", full.names = TRUE, 
                                 pos = c(4, 6, 11) + 8)
 
@@ -113,37 +121,26 @@ id_13 <- grep("13dec15b", fls_gimms_dsn)
 fls_gimms_dsn <- fls_gimms_dsn[id_82:id_13]
 rst_gimms_dsn <- stack(fls_gimms_dsn)
 
-## custom function that returns significant values of tau only
-significantTau <- function(x, p = 0.001) {
-  mk <- Kendall::MannKendall(x)
-  # reject value of tau if p >= 0.001
-  if (mk$sl >= p) {
-    return(NA)
-    # keep value of tau if p < 0.001
-  } else {
-    return(mk$tau)
-  }
-}
-
 cols <- colorRampPalette(brewer.pal(5, "BrBG"))
 
-lst_gimms_trend <- foreach(p = c(0.05, 0.01, 0.001), 
-                           .packages = c("raster", "rgdal", "Kendall", "latticeExtra")) %do% {
+lst_gimms_trend <- foreach(p = c(0.05, 0.01, 0.001)) %do% {
   
 #   rst_gimms_trend <- calc(rst_gimms_dsn,
-#                           fun = function(x) significantTau(x, p = p),
-#                           filename = paste0(ch_dir_extdata, "out/gimms_mk", gsub("0\\.", "", p), "_8213"),
+#                           fun = function(x, n = 1) {
+#                             Rsenal::significantTau(x, p = p, prewhitening = TRUE, 
+#                                                    conf.intervals = FALSE)
+#                           }, filename = paste0("data/out/gimms_mk", gsub("0\\.", "", p), "_8213"),
 #                           format = "GTiff", overwrite = TRUE)
   
   # reimport
-  file_in <- paste0(ch_dir_extdata, "out/gimms_mk", gsub("0\\.", "", p), "_8213.tif")
+  file_in <- paste0("data/out/gimms_mk", gsub("0\\.", "", p), "_8213.tif")
   rst_gimms_trend <- raster(file_in)
   
-  png(paste0(ch_dir_extdata, "vis/gimms_mk", gsub("0\\.", "", p), ".png"), 
-      width = 9, height = 9, units = "cm", res = 500)
+  png(paste0("data/vis/overall/gimms_mk", gsub("0\\.", "", p), ".png"), 
+      width = 14, height = 14, units = "cm", res = 500)
   p <- spplot(mask(rst_gimms_trend, spy_iran), col.regions = cols(1000),
               scales = list(draw = TRUE), maxpixels = 100000, 
-              at = seq(-.6, .6, .01)) +
+              at = seq(-.4, .4, .01)) +
     latticeExtra::layer(sp.polygons(spy_iran, col = "black"))
   print(p)
   dev.off()
@@ -159,47 +156,50 @@ lst_gimms_trend <- foreach(p = c(0.05, 0.01, 0.001),
 ## monthly composites
 # indices <- rep(1:(length(fls_gimms_dsn)/2), each = 2)
 # rst_gimms_dsn_mnth <- stackApply(rst_gimms_dsn, indices, fun = mean)
-# saveRDS(rst_gimms_dsn_mnth, file = "inst/extdata/dsn_mnth.rds")
-rst_gimms_dsn_mnth <- readRDS("inst/extdata/dsn_mnth.rds")
+# saveRDS(rst_gimms_dsn_mnth, file = "data/dsn_mnth.rds")
+rst_gimms_dsn_mnth <- readRDS("data/dsn_mnth.rds")
 
-for (p in c(0.05, 0.01, 0.001)) {
+lst_trends <- foreach(p = c(0.05, 0.01, 0.001)) %do% {
   
-  #   lst_mnth_trends <-
-  #     foreach(i = 1:12, j = month.abb,
-  #             .packages = c("raster", "rgdal", "Kendall"),
-  #             .export = "significantTau") %dopar% {
-  #               
-  #               rst_mnth <- rst_gimms_dsn_mnth[[seq(i, nlayers(rst_gimms_dsn_mnth), 12)]]
-  #               
-  #               calc(rst_mnth, fun = function(x) significantTau(x, p = p),
-  #                    filename = paste0(ch_dir_extdata, "out/monthly/gimms_mk", gsub("0\\.", "", p), "_", j, "_8213"),
-  #                    format = "GTiff", overwrite = TRUE)
-  #             }
-  #   
-  #   rst_mnth_trends <- stack(lst_mnth_trends)
+#     lst_mnth_trends <-
+#       foreach(i = 1:12, j = month.abb, .packages = lib) %dopar% {
+#                 
+#                 rst_mnth <- rst_gimms_dsn_mnth[[seq(i, nlayers(rst_gimms_dsn_mnth), 12)]]
+#                 
+#                 calc(rst_mnth, fun = function(x, n = 1) {
+#                   Rsenal::significantTau(x, p = p, prewhitening = TRUE, 
+#                                          conf.intervals = FALSE)
+#                 }, filename = paste0("data/out/monthly/gimms_mk", gsub("0\\.", "", p), "_", j, "_8213"),
+#                      format = "GTiff", overwrite = TRUE)
+#               }
+#     
+#     rst_mnth_trends <- stack(lst_mnth_trends)
   
   # reimport
   lst_mnth_trends <- lapply(month.abb, function(i) {
-    file_in <- paste0(ch_dir_extdata, paste0("out/monthly/gimms_mk", gsub("0\\.", "", p), "_", i, "_8213.tif"))
+    file_in <- paste0("data/out/monthly/gimms_mk", gsub("0\\.", "", p), "_", i, "_8213.tif")
     raster(file_in)
   })
-  rst_mnth_trends <- stack(lst_mnth_trends)
+  rst_mnth_trends <- stack(lst_mnth_trends[c(12, 1:11)])
   
   cols <- colorRampPalette(brewer.pal(5, "BrBG"))
-  png(paste0(ch_dir_extdata, "vis/gimms_mk", gsub("0\\.", "", p), "_monthly.png"), 
+  png(paste0("data/vis/monthly/gimms_mk", gsub("0\\.", "", p), "_monthly.png"), 
       width = 20, height = 24, units = "cm", res = 500)
   p <- spplot(mask(rst_mnth_trends, spy_iran), col.regions = cols(1000), 
               at = seq(-.85, .85, .01), layout = c(3, 4)) +
     latticeExtra::layer(sp.polygons(spy_iran, col = "black"))
   print(p)
   dev.off()
+  
+  return(rst_mnth_trends)
 }
 
 ################################################################################
 ## mann-kendall trend test (p < 0.001) per season
 ################################################################################
 
-fls_gimms_dsn <- rearrangeFiles(dsn = paste0(ch_dir_extdata, "/dsn"), 
+## 1982-2013
+fls_gimms_dsn <- rearrangeFiles(dsn = "data/dsn", 
                                 pattern = "^DSN_.*VI3g.tif", full.names = TRUE, 
                                 pos = c(4, 6, 11) + 8)
 
@@ -215,25 +215,27 @@ if (Sys.info()[["sysname"]] == "Windows") {
   invisible(Sys.setlocale(category = "LC_TIME", locale = "en_US.UTF-8"))
 }
 
-yrmn <- zoo::as.yearmon(substr(basename(fls_gimms_dsn), 12, 16), "%y%b")
-indices <- rep(1:(length(yrmn) / 6), each = 6)
-rst_gimms_dsn_ssn <- stackApply(rst_gimms_dsn, indices = indices, fun = mean)
-saveRDS(rst_gimms_dsn_ssn, file = "inst/extdata/dsn_ssn.rds")
-rst_gimms_dsn_ssn <- readRDS("inst/extdata/dsn_ssn.rds")
+# yrmn <- zoo::as.yearmon(substr(basename(fls_gimms_dsn), 12, 16), "%y%b")
+# indices <- rep(1:(length(yrmn) / 6), each = 6)
+# rst_gimms_dsn_ssn <- stackApply(rst_gimms_dsn, indices = indices, fun = mean)
+# saveRDS(rst_gimms_dsn_ssn, file = "data/dsn_ssn.rds")
+rst_gimms_dsn_ssn <- readRDS("data/dsn_ssn.rds")
 
 lst_ssn_trends <- foreach(p = c(0.05, 0.01, 0.001)) %do% {
   lst_ssn_trend <- 
     foreach(i = list(1, 2, 3, 4), j = list("DJF", "MAM", "JJA", "SON")) %dopar% {
       rst_ssn <- rst_gimms_dsn_ssn[[seq(i, nlayers(rst_gimms_dsn_ssn), 4)]]
       
-      calc(rst_ssn, fun = function(x) significantTau(x, p = p),
-           filename = paste0(ch_dir_extdata, "out/seasonal/gimms_mk", gsub("0\\.", "", p), "_", j, "_8213"),
+      calc(rst_ssn, fun = function(x) {
+        Rsenal::significantTau(x, p = p, prewhitening = TRUE, 
+                               conf.intervals = FALSE)
+        }, filename = paste0("data/out/seasonal/gimms_mk", gsub("0\\.", "", p), "_", j, "_8213"),
            format = "GTiff", overwrite = TRUE)
     }
   
   rst_ssn_trends <- stack(lst_ssn_trend)
   
-  png(paste0(ch_dir_extdata, "vis/gimms_mk", gsub("0\\.", "", p), "_ssn.png"), 
+  png(paste0("data/vis/seasonal/gimms_mk", gsub("0\\.", "", p), "_ssn.png"), 
       width = 14, height = 14, units = "cm", res = 500)
   p <- spplot(mask(rst_ssn_trends, spy_iran), col.regions = cols(1000), at = seq(-.85, .85, .01)) +
     latticeExtra::layer(sp.polygons(spy_iran, col = "black"))
